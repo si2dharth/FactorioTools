@@ -112,7 +112,7 @@
         </select>
     </div>
     <div>
-        <label for="numSimulations">Number of Simulations:</label>
+        <label for="numSimulations">Number of Iterations:</label>
         <input type="number" id="numSimulations" value="100" min="1">
     </div>
     <button id="simulateBtn">Simulate</button>
@@ -572,17 +572,17 @@ runSimulation();
             }
         }
 
+        let totalInput = [0, 0, 0, 0, 0];
         let totalOutput = [0, 0, 0, 0, 0];
         let fractionalCount = [0.0, 0.0, 0.0, 0.0, 0.0];
         let simulationOutput = [];
         let outputTimeSeries = [];
 
         for (let i = 0; i < numSimulations; i++) {
+            totalInput[inputQuality - 1] += 1;
             for (let q = 1; q <= 5; q++) {
-                if (totalOutput[q - 1] <= 0 && q != inputQuality) continue;
-                if (q != inputQuality) {
-                    totalOutput[q - 1] -= 1;
-                }
+                if (totalInput[q - 1] <= 0) continue;
+                totalInput[q - 1] -= 1;
                 let outputQuality = generateNext(q, totalQuality[q - 1]);
                 totalOutput[outputQuality - 1] += 1;
                 fractionalCount[q - 1] += totalProductivity[q - 1] / 100.0;
@@ -615,7 +615,7 @@ runSimulation();
                 if (Math.random() <= 0.25) {
                     // Determine recycled quality using generateNext with recycle quality for input type
                     let recycledQuality = generateNext(q, recycleQuality[q - 1]);
-                    totalOutput[recycledQuality - 1] += 1;
+                    totalInput[recycledQuality - 1] += 1;
                     
                 }
             }
