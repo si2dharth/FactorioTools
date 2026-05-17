@@ -1,1 +1,0 @@
-This folder contains the built output assets for the worker "factorio-tools" generated at 2026-05-17T04:24:05.612Z.
