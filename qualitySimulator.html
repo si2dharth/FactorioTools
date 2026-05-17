@@ -1,0 +1,630 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Quality/Productivity Simulator</title>
+</head>
+<body>
+    <style>
+        body {
+            background-color: #181a1b;
+            color: #e0e0e0;
+            font-family: Arial, sans-serif;
+        }
+        input, select, button, fieldset, legend, label {
+            background: #23272a;
+            color: #e0e0e0;
+            border: 1px solid #444;
+        }
+        input, select, button {
+            padding: 4px 8px;
+            margin: 2px 0;
+        }
+        button {
+            cursor: pointer;
+            border-radius: 4px;
+        }
+        fieldset {
+            border-radius: 6px;
+            margin-bottom: 12px;
+        }
+        #outputChart {
+            background: #23272a;
+            border-radius: 8px;
+        }
+        .info-box {
+            margin: 10px 0;
+            padding: 8px 12px;
+            background: #23272a;
+            border-radius: 6px;
+            border: 1px solid #444;
+            display: inline-block;
+        }
+        a, a:visited { color: #8ab4f8; }
+        .slot-box {
+            width: 48px !important;
+            height: 48px !important;
+            min-width: 48px !important;
+            min-height: 48px !important;
+            border-radius: 8px;
+            border: 2px solid #888;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.1em;
+            cursor: pointer;
+            position: relative;
+            transition: border 0.2s, box-shadow 0.2s;
+            user-select: none;
+        }
+        .slot-empty {
+            background: #23272a;
+            border: 2px dashed #444;
+        }
+        .slot-productivity {
+            background: #e6194b;
+            color: #fff;
+            border: 2px solid #e6194b;
+        }
+        .slot-quality {
+            background: #fff;
+            color: #23272a;
+            border: 2px solid #fff;
+        }
+        .slot-box.selected, .slot-box:focus, .slot-box:hover {
+            outline: 2px solid #8ab4f8;
+            z-index: 2;
+        }
+        .slot-level, .slot-quality-val {
+            font-size: 0.9em;
+            font-weight: bold;
+        }
+    </style>
+    <h1>Quality/Productivity Simulator</h1>
+    <div>
+        <label for="baseProductivity">Base Productivity:</label>
+        <input type="number" id="baseProductivity" value="50" min="0" step="0.1">
+    </div>
+    <div>
+        <span style="font-weight:bold; font-size:1.1em;">Slots:</span>
+        <div id="slotsRow" style="min-height:52px;align-items:center;display:flex;flex-direction:row;gap:12px;margin:18px 0 18px 0;justify-content:flex-start;width:100%;"></div>
+    </div>
+    <div>
+        <span style="font-weight:bold; font-size:1.1em;">Recycle Slots:</span>
+        <div id="recycleSlotsRow" style="min-height:52px;align-items:center;display:flex;flex-direction:row;gap:12px;margin:18px 0 18px 0;justify-content:flex-start;width:100%;"></div>
+    </div>
+    <div>
+        <label for="inputQuality">Input Quality:</label>
+        <select id="inputQuality">
+            <option value="1">1</option>
+            <option value="2">2</option>
+            <option value="3">3</option>
+            <option value="4">4</option>
+            <option value="5">5</option>
+        </select>
+    </div>
+    <div>
+        <label for="numSimulations">Number of Simulations:</label>
+        <input type="number" id="numSimulations" value="100" min="1">
+    </div>
+    <button id="simulateBtn">Simulate</button>
+    <div class="info-box" id="simulationResults" style="margin-top:12px;">
+        <!-- Box plot results will be shown here -->
+    </div>
+    <script>
+    // Quality and Productivity percentage tables
+    const qualityPct = [
+        [1.0, 1.3, 1.6, 1.9, 2.5],
+        [2.0, 2.5, 3.2, 3.8, 5.0],
+        [2.5, 3.2, 4.0, 4.7, 6.2]
+    ];
+
+    const productivityPct = [
+        [ 4,  5,  6,  7, 10],
+        [ 6,  7,  9, 11, 15],
+        [10, 13, 16, 19, 25]
+    ];
+
+    // Function to generate the next quality value
+    function generateNext(inputQuality, upgradeChancePct) {
+        // Generate a random integer from 1 to 100
+        const chance = Math.random() * 100;
+        if (inputQuality < 2 && chance < upgradeChancePct / 1000) {
+            return inputQuality + 4;
+        } else if (inputQuality < 3 && chance < upgradeChancePct / 100) {
+            return inputQuality + 3;
+        } else if (inputQuality < 4 && chance < upgradeChancePct / 10) {
+            return inputQuality + 2;
+        } else if (inputQuality < 5 && chance < upgradeChancePct) {
+            return inputQuality + 1;
+        } else {
+            return inputQuality;
+        }
+    }
+
+    let baseProductivity = 50.0;
+    const totalSlots = 8;
+    // 2D slots: slots[inputQuality][slotIndex] (inputQuality 1-5, indices 0-4)
+    let slots = Array.from({length: 5}, () => new Array(totalSlots).fill(null));
+    // 2D recycle slots: recycleSlots[inputQuality][recycleIndex] (inputQuality 1-5, indices 0-4)
+    let recycleSlots = Array.from({length: 5}, () => new Array(4).fill(null));
+
+    // --- Local Storage Persistence ---
+    function saveInputsToStorage() {
+        const data = {
+            baseProductivity,
+            slots,
+            recycleSlots,
+            inputQuality: document.getElementById('inputQuality').value,
+            numSimulations: document.getElementById('numSimulations').value
+        };
+        localStorage.setItem('simulatorInputs', JSON.stringify(data));
+    }
+    function loadInputsFromStorage() {
+        const data = JSON.parse(localStorage.getItem('simulatorInputs') || '{}');
+        if (data.baseProductivity !== undefined) document.getElementById('baseProductivity').value = data.baseProductivity;
+        if (data.inputQuality !== undefined) document.getElementById('inputQuality').value = data.inputQuality;
+        if (data.numSimulations !== undefined) document.getElementById('numSimulations').value = data.numSimulations;
+        if (Array.isArray(data.slots)) {
+            slots = Array.from({length: 5}, (_, iq) => {
+                if (data.slots[iq] && Array.isArray(data.slots[iq])) {
+                    return data.slots[iq].slice();
+                }
+                return new Array(totalSlots).fill(null);
+            });
+        } else {
+            slots = Array.from({length: 5}, () => new Array(totalSlots).fill(null));
+        }
+        if (Array.isArray(data.recycleSlots)) {
+            for (let iq = 0; iq < 5; iq++) {
+                if (data.recycleSlots[iq] && Array.isArray(data.recycleSlots[iq])) {
+                    recycleSlots[iq] = data.recycleSlots[iq].slice();
+                }
+            }
+        } else {
+            recycleSlots = Array.from({length: 5}, () => new Array(4).fill(null));
+        }
+        baseProductivity = parseFloat(document.getElementById('baseProductivity').value);
+    }
+
+    // --- Common function to calculate total P and Q for each input quality row ---
+    // Returns an array of 5 objects, each with { productivity, quality } for each IQ row
+    function calculateRowStats() {
+        const rowStats = [];
+        for (let iq = 0; iq < 5; iq++) {
+            let totalP = 0;
+            let totalQ = 0;
+            for (let i = 0; i < totalSlots; i++) {
+                if (slots[iq][i]) {
+                    if (slots[iq][i].type === 'productivity') {
+                        totalP += productivityPct[slots[iq][i].level - 1][slots[iq][i].quality - 1];
+                    } else if (slots[iq][i].type === 'quality') {
+                        totalQ += qualityPct[slots[iq][i].level - 1][slots[iq][i].quality - 1];
+                    }
+                }
+            }
+            rowStats.push({ productivity: totalP, quality: totalQ });
+        }
+        return rowStats;
+    }
+
+    // --- Slot UI Rendering (2D: one row per input quality) ---
+    function renderSlots() {
+        const container = document.getElementById('slotsRow');
+        container.innerHTML = '';
+        const qualityNames = ['Normal', 'Uncommon', 'Rare', 'Epic', 'Legendary'];
+        // Calculate stats for each row first
+        const rowStats = calculateRowStats();
+        
+        // For each input quality (1-5), create a wrapper div with label on one row and slots on another
+        for (let iq = 0; iq < 5; iq++) {
+            const wrapper = document.createElement('div');
+            wrapper.style.marginBottom = '12px';
+            wrapper.style.display = 'flex';
+            wrapper.style.flexDirection = 'column';
+            
+            // Label row with P and Q stats
+            const labelRow = document.createElement('div');
+            labelRow.style.marginBottom = '4px';
+            labelRow.innerHTML = `<span style="font-size:0.85em;opacity:0.8;">${qualityNames[iq]}:</span> <span style="font-size:0.8em;color:#8ab4f8;">P: ${rowStats[iq].productivity.toFixed(1)} ; Q: ${rowStats[iq].quality.toFixed(1)}</span>`;
+            wrapper.appendChild(labelRow);
+            
+            // Create 2 rows of 4 slots each
+            for (let rowIdx = 0; rowIdx < Math.ceil(totalSlots / 4); rowIdx++) {
+                const row = document.createElement('div');
+                row.style.display = 'flex';
+                row.style.flexDirection = 'row';
+                row.style.gap = '12px';
+                row.style.marginBottom = '8px';
+                for (let i = rowIdx * 4; i < Math.min((rowIdx + 1) * 4, totalSlots); i++) {
+                    let slot = slots[iq][i];
+                    const box = document.createElement('div');
+                    box.className = 'slot-box ' + (slot ? 'slot-' + slot.type : 'slot-empty');
+                    box.tabIndex = 0;
+                    box.dataset.iq = iq;
+                    box.dataset.idx = i;
+                    // Content
+                    const qualityLetters = ['N', 'U', 'R', 'E', 'L'];
+                    const levelPrefix = 'T';
+                    if (!slot || slot.type === 'empty') {
+                        box.innerHTML = `<span style="font-size:0.7em;opacity:0.5;">Empty</span>`;
+                    } else {
+                        box.innerHTML = `<span class="slot-level">${levelPrefix}${slot.level}</span><span class="slot-quality-val">${qualityLetters[slot.quality - 1]}</span>`;
+                    }
+                    // Tooltip
+                    box.title = (!slot || slot.type === 'empty') ? `Empty slot ${qualityNames[iq]} (click to add module)` : (`${qualityNames[iq]} ${slot.type.charAt(0).toUpperCase() + slot.type.slice(1)} module\nLevel: ${slot.level}\nQuality: ${slot.quality}`);
+                    // Click to toggle type
+                    box.addEventListener('click', function() {
+                        let current = slots[iq][i];
+                        let nextType;
+                        if (!current || current.type === 'empty') {
+                            nextType = 'productivity';
+                        } else if (current.type === 'productivity') {
+                            nextType = 'quality';
+                        } else {
+                            nextType = 'empty';
+                        }
+                        slots[iq][i] = nextType === 'empty' ? null : { type: nextType, level: 3, quality: 5 };
+                        renderSlots();
+                        renderRecycleSlots();
+                        saveInputsToStorage();
+                        runSimulation();
+                    });
+                    // Keyboard controls for level/quality
+                    box.addEventListener('mouseenter', function() { box.focus(); });
+                    box.addEventListener('focus', function() {
+                        box.classList.add('selected');
+                    });
+                    box.addEventListener('blur', function() {
+                        box.classList.remove('selected');
+                    });
+                    box.addEventListener('keydown', function(e) {
+                        let current = slots[iq][i];
+                        if (!current) return;
+                        if (e.key === 'ArrowUp') {
+                            // Increase level
+                            if (current.level < 3) current.level++;
+                        } else if (e.key === 'ArrowDown') {
+                            // Decrease level
+                            if (current.level > 1) current.level--;
+                        } else if (e.key === 'ArrowRight') {
+                            // Increase quality
+                            if (current.quality < 5) current.quality++;
+                        } else if (e.key === 'ArrowLeft') {
+                            // Decrease quality
+                            if (current.quality > 1) current.quality--;
+                        } else {
+                            return;
+                        }
+                        slots[iq][i] = { ...current };
+                        renderSlots();
+                        renderRecycleSlots();
+                        saveInputsToStorage();
+                        runSimulation();
+                        e.preventDefault();
+                    });
+                    row.appendChild(box);
+                }
+                wrapper.appendChild(row);
+            }
+            container.appendChild(wrapper);
+            
+            // Add separator between qualities (but not after the last one)
+            if (iq < 4) {
+                const separator = document.createElement('hr');
+                separator.style.border = '0';
+                separator.style.borderTop = '1px solid #444';
+                separator.style.margin = '8px 0';
+                container.appendChild(separator);
+            }
+        }
+    }
+
+    // --- Recycle Slot Stats ---
+    function calculateRecycleRowStats() {
+        const recycleRowStats = [];
+        for (let iq = 0; iq < 5; iq++) {
+            let totalQ = 0;
+            for (let r = 0; r < 4; r++) {
+                if (recycleSlots[iq][r]) {
+                    if (recycleSlots[iq][r].type === 'quality') {
+                        totalQ += qualityPct[recycleSlots[iq][r].level - 1][recycleSlots[iq][r].quality - 1];
+                    }
+                }
+            }
+            recycleRowStats.push({ quality: totalQ });
+        }
+        return recycleRowStats;
+    }
+
+    // --- Recycle Slot UI Rendering (2D: one row per input quality) ---
+    function renderRecycleSlots() {
+        const container = document.getElementById('recycleSlotsRow');
+        container.innerHTML = '';
+        const qualityNames = ['Normal', 'Uncommon', 'Rare', 'Epic', 'Legendary'];
+        // Calculate stats for each row first
+        const recycleRowStats = calculateRecycleRowStats();
+        
+        // For each input quality (1-4), create a wrapper div with label on one row and slots on another (no IQ 5)
+        for (let iq = 0; iq < 4; iq++) {
+            const wrapper = document.createElement('div');
+            wrapper.style.marginBottom = '12px';
+            wrapper.style.display = 'flex';
+            wrapper.style.flexDirection = 'column';
+            
+            // Label row with Q stat
+            const labelRow = document.createElement('div');
+            labelRow.style.marginBottom = '4px';
+            labelRow.innerHTML = `<span style="font-size:0.85em;opacity:0.8;">Recycle ${qualityNames[iq]}:</span> <span style="font-size:0.8em;color:#8ab4f8;">Q: ${recycleRowStats[iq].quality.toFixed(1)}</span>`;
+            wrapper.appendChild(labelRow);
+            
+            // Slots row
+            const row = document.createElement('div');
+            row.style.display = 'flex';
+            row.style.flexDirection = 'row';
+            row.style.gap = '12px';
+            row.style.marginBottom = '8px';
+            for (let i = 0; i < 4; i++) {
+                let slot = recycleSlots[iq][i];
+                const box = document.createElement('div');
+                box.className = 'slot-box ' + (slot ? 'slot-' + slot.type : 'slot-empty');
+                box.tabIndex = 0;
+                box.dataset.iq = iq;
+                box.dataset.idx = i;
+                // Content
+                const qualityLetters = ['N', 'U', 'R', 'E', 'L'];
+                const levelPrefix = 'T';
+                if (!slot || slot.type === 'empty') {
+                    box.innerHTML = `<span style="font-size:0.7em;opacity:0.5;">Empty</span>`;
+                } else {
+                    box.innerHTML = `<span class="slot-level">${levelPrefix}${slot.level}</span><span class="slot-quality-val">${qualityLetters[slot.quality - 1]}</span>`;
+                }
+                // Tooltip
+                box.title = (!slot || slot.type === 'empty') ? `Empty recycle slot ${qualityNames[iq]} (click to add quality module)` : (`${qualityNames[iq]} Quality module\nLevel: ${slot.level}\nQuality: ${slot.quality}\nQuality bonus: ${recycleRowStats[iq].quality.toFixed(1)}`);
+                // Click to toggle type (only empty <-> quality)
+                box.addEventListener('click', function() {
+                    let current = recycleSlots[iq][i];
+                    let nextType = current === null || current.type === 'empty' ? 'quality' : 'empty';
+                    recycleSlots[iq][i] = nextType === 'empty' ? null : { type: nextType, level: 3, quality: 5 };
+                    renderRecycleSlots();
+                    renderSlots();
+                    saveInputsToStorage();
+                    runSimulation();
+                });
+                // Keyboard controls for level/quality
+                box.addEventListener('mouseenter', function() { box.focus(); });
+                box.addEventListener('focus', function() {
+                    box.classList.add('selected');
+                });
+                box.addEventListener('blur', function() {
+                    box.classList.remove('selected');
+                });
+                box.addEventListener('keydown', function(e) {
+                    let current = recycleSlots[iq][i];
+                    if (!current) return;
+                    if (e.key === 'ArrowUp') {
+                        // Increase level
+                        if (current.level < 3) current.level++;
+                    } else if (e.key === 'ArrowDown') {
+                        // Decrease level
+                        if (current.level > 1) current.level--;
+                    } else if (e.key === 'ArrowRight') {
+                        // Increase quality
+                        if (current.quality < 5) current.quality++;
+                    } else if (e.key === 'ArrowLeft') {
+                        // Decrease quality
+                        if (current.quality > 1) current.quality--;
+                    } else {
+                        return;
+                    }
+                    recycleSlots[iq][i] = { ...current };
+                    renderRecycleSlots();
+                    renderSlots();
+                    saveInputsToStorage();
+                    runSimulation();
+                    e.preventDefault();
+                });
+                row.appendChild(box);
+            }
+            wrapper.appendChild(row);
+            container.appendChild(wrapper);
+            
+            // Add separator between qualities (but not after the last one)
+            if (iq < 3) {
+                const separator = document.createElement('hr');
+                separator.style.border = '0';
+                separator.style.borderTop = '1px solid #444';
+                separator.style.margin = '8px 0';
+                container.appendChild(separator);
+            }
+        }
+    }
+// Initial load from storage
+loadInputsFromStorage();
+renderSlots();
+renderRecycleSlots();
+runSimulation();
+
+    document.getElementById('inputQuality').addEventListener('change', function() {
+        saveInputsToStorage();
+        runSimulation();
+    });
+    document.getElementById('numSimulations').addEventListener('change', function() {
+        saveInputsToStorage();
+        runSimulation();
+    });
+
+    function runSimulation() {
+        // Save all inputs before simulating
+        saveInputsToStorage();
+
+        // Read baseProductivity, inputQuality, and numSimulations
+        baseProductivity = parseFloat(document.getElementById('baseProductivity').value);
+        const inputQuality = parseInt(document.getElementById('inputQuality').value);
+        const numSimulations = parseInt(document.getElementById('numSimulations').value);
+
+        // Run simulation 50 times and collect final outputs
+        const numRuns = 50;
+        const allFinalOutputs = []; // Array of 50 arrays, each with 5 values (quality 1-5)
+        
+        for (let run = 0; run < numRuns; run++) {
+            const timeSeries = simulate(inputQuality, numSimulations);
+            const finalOutput = timeSeries.length > 0 ? timeSeries[timeSeries.length - 1] : [0, 0, 0, 0, 0];
+            allFinalOutputs.push(finalOutput);
+        }
+
+        // Calculate box plot statistics for each quality level
+        const boxPlotData = [];
+        let globalMax = 0;
+        for (let q = 0; q < 5; q++) {
+            const values = allFinalOutputs.map(run => run[q]).sort((a, b) => a - b);
+            const min = values[0];
+            const max = values[values.length - 1];
+            const median = values[Math.floor(values.length / 2)];
+            const q1Idx = Math.floor(values.length * 0.25);
+            const q3Idx = Math.floor(values.length * 0.75);
+            const q1 = values[q1Idx];
+            const q3 = values[q3Idx];
+            boxPlotData.push({ min, q1, median, q3, max });
+            if (max > globalMax) globalMax = max;
+        }
+
+        // Display box plot results
+        const resultsBox = document.getElementById('simulationResults');
+        const colors = ['#e6194b', '#3cb44b', '#ffe119', '#4363d8', '#f58231'];
+        const qualityNames = ['Normal', 'Uncommon', 'Rare', 'Epic', 'Legendary'];
+        let html = '<b>Simulation Results (50 runs, ' + numSimulations + ' steps each):</b><br>';
+        html += '<div style="margin-top:8px;">';
+        
+        // Scale all plots from 0 to global max
+        const scale = (val) => (val / globalMax) * 100;
+        
+        for (let q = 0; q < 5; q++) {
+            const bp = boxPlotData[q];
+            
+            html += `<div style="margin:4px 0;">
+                <span style="color:${colors[q]};font-weight:bold;">${qualityNames[q]}:</span>
+                Median: ${bp.median} |
+                ${bp.min}-${bp.max}
+            </div>`;
+            
+            // Visual box plot (scaled from 0 to global max)
+            html += `<div style="position:relative;height:20px;margin-left:100px;margin-bottom:8px;">
+                <div style="position:absolute;left:0;top:8px;height:4px;background:#ccc;width:100%;"></div>
+                <div style="position:absolute;left:${scale(bp.q1)}%;width:${scale(bp.q3) - scale(bp.q1)}%;top:4px;height:12px;background:${colors[q]};opacity:0.7;border:1px solid ${colors[q]};"></div>
+                <div style="position:absolute;left:${scale(bp.median)}%;top:2px;height:16px;width:2px;background:${colors[q]};"></div>
+                <div style="position:absolute;left:${scale(bp.min)}%;top:8px;height:4px;width:4px;background:${colors[q]};border-radius:50%;"></div>
+                <div style="position:absolute;left:${scale(bp.max)}%;top:8px;height:4px;width:4px;background:${colors[q]};border-radius:50%;"></div>
+            </div>`;
+        }
+        html += '</div>';
+        resultsBox.innerHTML = html;
+    }
+
+    document.getElementById('simulateBtn').addEventListener('click', runSimulation);
+
+    class Module {
+        constructor(type = 'productivity') {
+            this.type = type;
+            this.quality = 1;
+            this.level = 1;
+
+        }
+    }
+
+    function insertModule(slot, module) {
+        if (slot >= 0 && slot < totalSlots) {
+            slots[slot] = module;
+        }
+    }
+
+    function simulate(inputQuality, numSimulations) {
+        // Build totalQuality array for each input quality (1-5)
+        let totalQuality = new Array(5).fill(0);
+        let recycleQuality = new Array(5).fill(0);
+        let totalProductivity = new Array(5).fill(baseProductivity);
+
+        // Use calculateRowStats to get total productivity and quality per row
+        const rowStats = calculateRowStats();
+        for (let iq = 0; iq < 5; iq++) {
+            totalQuality[iq] = rowStats[iq].quality;
+        }
+
+        // Calculate total productivity from all rows
+        for (let iq = 0; iq < 5; iq++) {
+            totalProductivity[iq] += rowStats[iq].productivity;
+        }
+
+        // Include recycle slots for each input quality
+        for (let iq = 0; iq < 5; iq++) {
+            for (let r = 0; r < 4; r++) {
+                if (recycleSlots[iq][r]) {
+                    recycleQuality[iq] += qualityPct[recycleSlots[iq][r].level - 1][recycleSlots[iq][r].quality - 1];
+                }
+            }
+        }
+
+        let totalOutput = [0, 0, 0, 0, 0];
+        let fractionalCount = [0.0, 0.0, 0.0, 0.0, 0.0];
+        let simulationOutput = [];
+        let outputTimeSeries = [];
+
+        for (let i = 0; i < numSimulations; i++) {
+            for (let q = 1; q <= 5; q++) {
+                if (totalOutput[q - 1] <= 0 && q != inputQuality) continue;
+                if (q != inputQuality) {
+                    totalOutput[q - 1] -= 1;
+                }
+                let outputQuality = generateNext(q, totalQuality[q - 1]);
+                totalOutput[outputQuality - 1] += 1;
+                fractionalCount[q - 1] += totalProductivity[q - 1] / 100.0;
+                if (fractionalCount[q - 1] >= 1.0) { 
+                    totalOutput[outputQuality - 1] += Math.floor(fractionalCount[q - 1]);
+                    fractionalCount[q - 1] -= Math.floor(fractionalCount[q - 1]);
+                }
+            }
+
+            // Recycle logic: at the end of each simulation step, before adding to time series
+            // For each output quality (1-4, not 5), check if there are recycle modules
+            // and apply 25% chance of recycling
+            for (let q = 1; q <= 4; q++) {
+                // Skip if no outputs of this quality
+                if (totalOutput[q - 1] <= 0) continue;
+                // Skip if no recycle modules for this input quality
+                let hasRecycleModules = false;
+                for (let r = 0; r < 4; r++) {
+                    if (recycleSlots[q - 1][r]) {
+                        hasRecycleModules = true;
+                        break;
+                    }
+                }
+                if (!hasRecycleModules) continue;
+
+                // Remove one from original quality
+                totalOutput[q - 1] -= 1;
+
+                // 25% chance of recycling each output
+                if (Math.random() <= 0.25) {
+                    // Determine recycled quality using generateNext with recycle quality for input type
+                    let recycledQuality = generateNext(q, recycleQuality[q - 1]);
+                    totalOutput[recycledQuality - 1] += 1;
+                    
+                }
+            }
+
+            // Push a copy of the current totalOutput array
+            outputTimeSeries.push([...totalOutput]);
+        }
+        // Return the time series of totalOutput arrays
+        return outputTimeSeries;
+    }
+
+    function setBaseProductivity(value) {
+        baseProductivity = value;
+    }
+
+    </script>
+</body>
+</html>
